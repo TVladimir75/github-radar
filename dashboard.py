@@ -30,8 +30,12 @@ def load_data():
     growth.sort(reverse=True)
     top_repos = [repo for _, _, repo in growth[:TOP_N]]
     obs = con.execute("SELECT seen_at, repo, note FROM observations ORDER BY seen_at DESC").fetchall()
+    try:
+        advices = con.execute("SELECT seen_at, advice FROM advices ORDER BY seen_at DESC").fetchall()
+    except Exception:
+        advices = []
     con.close()
-    return {"dates": dates, "series": series, "meta": meta, "top_repos": top_repos, "growth": growth, "obs": obs}
+    return {"dates": dates, "series": series, "meta": meta, "top_repos": top_repos, "growth": growth, "obs": obs, "advices": advices}
 
 
 def build_html(data):
@@ -58,6 +62,12 @@ def build_html(data):
             obs_html += f"<div class='obs-item'><span class='obs-repo'>{repo}</span> <span class='obs-note'>{note}</span></div>"
     else:
         obs_html = "<p style='color:#888'>Наблюдения появятся после нескольких запусков.</p>"
+    adv_html = ""
+    for d, text in data.get("advices", []):
+        safe = (text or "").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
+        adv_html += f"<div class='adv-date'>{d}</div><div class='adv-text'>{safe}</div>"
+    if not adv_html:
+        adv_html = "<p style='color:#888'>Отчёты появятся после запусков радара.</p>"
     generated = datetime.now(TZ).strftime("%d.%m.%Y %H:%M") + " (Астана)"
     return f"""<!DOCTYPE html>
 <html lang="ru"><head><meta charset="UTF-8">
@@ -75,11 +85,14 @@ a{{color:#58a6ff;text-decoration:none}} a:hover{{text-decoration:underline}}
 .obs-date{{color:#8b949e;font-size:12px;margin:14px 0 6px;font-weight:600}}
 .obs-item{{padding:6px 0;border-bottom:1px solid #21262d;font-size:13px}}
 .obs-repo{{color:#58a6ff;font-weight:600}} .obs-note{{color:#c9d1d9}}
+.adv-date{{color:#8b949e;font-size:12px;margin:16px 0 6px;font-weight:600}}
+.adv-text{{color:#c9d1d9;font-size:14px;line-height:1.6;background:#0d1117;padding:12px;border-radius:8px;border:1px solid #21262d}}
 canvas{{max-height:380px}}
 </style></head><body>
 <h1>📡 GitHub Radar</h1>
 <div class="sub">Обновлено: {generated} · дней истории: {len(dates)}</div>
 <div class="card"><h2>📈 Рост звёзд (топ по приросту)</h2><canvas id="growthChart"></canvas></div>
+<div class="card"><h2>📋 Отчёты Claude по дням</h2>{adv_html}</div>
 <div class="card"><h2>🎯 Наблюдения Claude по дням</h2>{obs_html}</div>
 <div class="card"><h2>🔥 Топ по приросту</h2><table>
 <tr><th>Проект</th><th>Язык</th><th style="text-align:right">Звёзд</th><th style="text-align:right">Прирост</th></tr>

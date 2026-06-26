@@ -52,6 +52,8 @@ def init_db():
     con.execute("""CREATE TABLE IF NOT EXISTS observations (
         seen_at TEXT, repo TEXT, note TEXT,
         PRIMARY KEY (seen_at, repo))""")
+    con.execute("""CREATE TABLE IF NOT EXISTS advices (
+        seen_at TEXT PRIMARY KEY, advice TEXT)""")
     con.commit()
     return con
 
@@ -296,6 +298,9 @@ def main():
         advice, new_obs = supervise_with_claude(client, repos, movers, past_obs)
         if new_obs:
             save_observations(con, today, new_obs)
+        if advice:
+            con.execute("INSERT OR REPLACE INTO advices VALUES (?,?)", (today, advice))
+            con.commit()
 
         now_str = datetime.now(TZ).strftime("%d.%m %H:%M")
         lines = []

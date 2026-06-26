@@ -8,6 +8,7 @@ import sqlite3
 import urllib.request
 import urllib.parse
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 # ============== НАСТРОЙКИ ==============
 # Секреты — в .env (файл в .gitignore). См. .env.example
@@ -35,6 +36,7 @@ SPIKE_THRESHOLD = 20
 ANALYZE_TOP = 5
 MEMORY_DAYS = 7              # сколько дней Claude помнит свои наблюдения
 CLAUDE_MODEL = "claude-sonnet-4-5-20250929"
+TZ = ZoneInfo("Asia/Almaty")
 # ======================================
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "history.db")
@@ -287,7 +289,7 @@ def main():
     if new_obs:
         save_observations(con, today, new_obs)
 
-    now_str = datetime.now().strftime("%d.%m %H:%M")
+    now_str = datetime.now(TZ).strftime("%d.%m %H:%M")
     lines = []
 
     if spikes:

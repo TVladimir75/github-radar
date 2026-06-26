@@ -2,11 +2,13 @@
 # -*- coding: utf-8 -*-
 import os, sqlite3, json, subprocess
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "history.db")
 OUT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "index.html")
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 TOP_N = 12
+TZ = ZoneInfo("Asia/Almaty")
 
 
 def load_data():
@@ -56,7 +58,7 @@ def build_html(data):
             obs_html += f"<div class='obs-item'><span class='obs-repo'>{repo}</span> <span class='obs-note'>{note}</span></div>"
     else:
         obs_html = "<p style='color:#888'>Наблюдения появятся после нескольких запусков.</p>"
-    generated = datetime.now().strftime("%d.%m.%Y %H:%M")
+    generated = datetime.now(TZ).strftime("%d.%m.%Y %H:%M") + " (Астана)"
     return f"""<!DOCTYPE html>
 <html lang="ru"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -105,7 +107,7 @@ def publish_to_github():
         if unchanged:
             print("[git] index.html без изменений")
             return
-        msg = f"Update dashboard {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        msg = f"Update dashboard {datetime.now(TZ).strftime('%Y-%m-%d %H:%M')} Astana"
         subprocess.run(
             ["git", "-C", ROOT_DIR, "commit", "-m", msg], check=True, capture_output=True, text=True)
         push = subprocess.run(

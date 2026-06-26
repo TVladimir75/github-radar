@@ -116,6 +116,41 @@ def collect():
     return list(repos.values())
 
 
+def collect_hn():
+    """Истории Hacker News по темам через официальный Algolia API."""
+    queries = ["AI agents", "LLM", "RAG", "MCP", "SaaS", "automation"]
+    seen = {}
+    for q in queries:
+        url = ("https://hn.algolia.com/api/v1/search?"
+               + urllib.parse.urlencode({
+                   "query": q, "tags": "story", "hitsPerPage": 20}))
+        try:
+            with urllib.request.urlopen(url, timeout=30) as resp:
+                data = json.load(resp)
+        except Exception as e:
+            print(f"[!] HN API ({q}): {e}")
+            continue
+        added = 0
+        for h in data.get("hits", []):
+            if (h.get("points") or 0) <= 50:
+                continue
+            oid = h.get("objectID")
+            if not oid or oid in seen:
+                continue
+            seen[oid] = {
+                "title": h.get("title") or "",
+                "points": h.get("points") or 0,
+                "comments": h.get("num_comments") or 0,
+                "url": h.get("url") or f"https://news.ycombinator.com/item?id={oid}",
+                "hn_url": f"https://news.ycombinator.com/item?id={oid}",
+            }
+            added += 1
+            if added >= 5:
+                break
+    items = sorted(seen.values(), key=lambda x: x["points"], reverse=True)
+    return items[:10]
+
+
 def _client():
     key = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
     if not key:
@@ -234,26 +269,55 @@ def supervise_with_claude(client, repos, movers, past_obs):
     return advice, obs
 
 
+def tg_html(s):
+    return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def split_message(text, limit=4000):
+    if len(text) <= limit:
+        return [text]
+    parts, current = [], ""
+    for block in text.split("\n\n"):
+        chunk = block if not current else f"{current}\n\n{block}"
+        if len(chunk) <= limit:
+            current = chunk
+            continue
+        if current:
+            parts.append(current)
+        current = block if len(block) <= limit else block[:limit]
+    if current:
+        parts.append(current)
+    return parts
+
+
 def send_telegram(text):
     if not TG_TOKEN or TG_TOKEN == "ВСТАВЬ_ТОКЕН_БОТА":
         print("[!] Не задан TG_TOKEN (.env или переменная окружения). Вот что было бы отправлено:\n")
         print(text)
         return
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
-    data = urllib.parse.urlencode({
-        "chat_id": TG_CHAT_ID, "text": text,
-        "parse_mode": "HTML", "disable_web_page_preview": "true"}).encode()
-    try:
-        with urllib.request.urlopen(urllib.request.Request(url, data=data), timeout=30) as resp:
-            res = json.load(resp)
-            print("[ok] Отправлено в Telegram." if res.get("ok") else f"[!] Telegram: {res}")
-    except Exception as e:
-        print(f"[!] Ошибка отправки: {e}")
+    for part in split_message(text):
+        data = urllib.parse.urlencode({
+            "chat_id": TG_CHAT_ID, "text": part,
+            "parse_mode": "HTML", "disable_web_page_preview": "true"}).encode()
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, data=data), timeout=30) as resp:
+                res = json.load(resp)
+                if not res.get("ok"):
+                    print(f"[!] Telegram: {res}")
+                    return
+        except Exception as e:
+            err = e.read().decode() if hasattr(e, "read") else str(e)
+            print(f"[!] Ошибка отправки: {e}")
+            if err:
+                print(err[:500])
+            return
+    print("[ok] Отправлено в Telegram.")
 
 
 def fmt(r, prefix, analysis):
-    desc = (r.get("description") or "").replace("<","").replace(">","")[:80]
-    body = analysis if analysis else desc
+    desc = tg_html((r.get("description") or "")[:80])
+    body = tg_html(analysis) if analysis else desc
     return (f"<b>{prefix}</b> <a href=\"{r['html_url']}\">{r['full_name']}</a> "
             f"({r.get('language') or '-'})\n{body}")
 
@@ -323,17 +387,23 @@ def main():
                 prefix = f"+{val}\u2B50" if star else f"{val}\u2B50"
                 lines.append(fmt(r, prefix, analyzed.get(r["full_name"])))
 
+        # Hacker News — отдельный блок
+        hn_items = collect_hn()
+        if hn_items:
+            lines.append("\u2014 \u2014 \u2014\n\U0001F4F0 <b>Hacker News</b> — что обсуждают:")
+            for h in hn_items[:8]:
+                title = tg_html(h["title"][:90])
+                lines.append(f"<b>{h['points']}\u25B2</b> <a href=\"{h['hn_url']}\">{title}</a> "
+                             f"({h['comments']} коммент.)")
+
         # блок надзора — главное
         if advice:
-            lines.append(f"\U0001F3AF <b>Сегодня обрати внимание:</b>\n{advice}")
+            lines.append(f"\U0001F3AF <b>Сегодня обрати внимание:</b>\n{tg_html(advice)}")
 
         if not lines:
             print("Нечего отправлять.")
         else:
-            message = "\n\n".join(lines)
-            if len(message) > 4000:
-                message = message[:3950] + "\n\n\u2026(обрезано)"
-            send_telegram(message)
+            send_telegram("\n\n".join(lines))
 
         total = con.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0]
         days_tracked = con.execute("SELECT COUNT(DISTINCT seen_at) FROM snapshots").fetchone()[0]

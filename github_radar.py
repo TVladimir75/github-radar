@@ -54,6 +54,9 @@ def init_db():
         PRIMARY KEY (seen_at, repo))""")
     con.execute("""CREATE TABLE IF NOT EXISTS advices (
         seen_at TEXT PRIMARY KEY, advice TEXT)""")
+    con.execute("""CREATE TABLE IF NOT EXISTS hn (
+        seen_at TEXT, hn_id TEXT, title TEXT, points INTEGER,
+        comments INTEGER, url TEXT, PRIMARY KEY (seen_at, hn_id))""")
     con.commit()
     return con
 
@@ -199,7 +202,7 @@ def analyze_with_claude(client, items):
     return result
 
 
-def supervise_with_claude(client, repos, movers, past_obs):
+def supervise_with_claude(client, repos, movers, past_obs, hn_items=None):
     """Надзор: Claude ведёт тренды во времени, помнит прошлые наблюдения,
     выдаёт ежедневный совет + новые наблюдения для записи в память.
     Возвращает (текст_совета, список_новых_наблюдений)."""
@@ -214,6 +217,13 @@ def supervise_with_claude(client, repos, movers, past_obs):
         cur_lines.append(f"- {r['full_name']} ({r.get('language') or '-'}), "
                          f"+{val}: {(r.get('description') or '')[:100]}")
     current = "\n".join(cur_lines)
+
+    if hn_items:
+        hn_lines = [f"- [{h['points']} очков, {h['comments']} комм.] {h['title']}"
+                    for h in hn_items[:8]]
+        hn_block = "\n".join(hn_lines)
+    else:
+        hn_block = "(нет данных HN)"
 
     # память прошлых наблюдений
     if past_obs:
@@ -233,7 +243,11 @@ def supervise_with_claude(client, repos, movers, past_obs):
         "записей. Если дней 1-2 — пиши 'наблюдение только началось, выводы предварительные'. "
         "Лучше честно сказать 'данных мало', чем преувеличить.\n\n"
         "ТВОИ ПРОШЛЫЕ НАБЛЮДЕНИЯ (за неделю):\n" + mem + "\n\n"
-        "СЕГОДНЯШНЯЯ КАРТИНА (растущие проекты):\n" + current + "\n\n"
+        "СЕГОДНЯШНЯЯ КАРТИНА GITHUB (что строят):\n" + current + "\n\n"
+        "ЧТО ОБСУЖДАЮТ НА HACKER NEWS (настроения, тревоги, запуски):\n" + hn_block + "\n\n"
+        "ВАЖНО: свяжи два источника. GitHub показывает что СТРОЯТ, HN — что "
+        "ОБСУЖДАЮТ и чего боятся. Самые сильные ниши там, где одно совпадает с другим "
+        "(строят инструмент И активно обсуждают проблему, которую он решает).\n\n"
         "Сделай две вещи:\n\n"
         "1) НАПИШИ СОВЕТ на русском (4-6 предложений, без списков), заголовок не нужен:\n"
         "   - что из прошлых наблюдений ПОДТВЕРДИЛОСЬ или усилилось (растёт несколько дней);\n"
@@ -358,8 +372,9 @@ def main():
         analyzed = analyze_with_claude(client, list(to_analyze.values()))
 
         # НАДЗОР: ведём тренды во времени
+        hn_items = collect_hn()
         past_obs = past_observations(con)
-        advice, new_obs = supervise_with_claude(client, repos, movers, past_obs)
+        advice, new_obs = supervise_with_claude(client, repos, movers, past_obs, hn_items)
         if new_obs:
             save_observations(con, today, new_obs)
         if advice:
@@ -388,8 +403,12 @@ def main():
                 lines.append(fmt(r, prefix, analyzed.get(r["full_name"])))
 
         # Hacker News — отдельный блок
-        hn_items = collect_hn()
         if hn_items:
+            for h in hn_items:
+                con.execute("INSERT OR REPLACE INTO hn VALUES (?,?,?,?,?,?)",
+                    (today, h["hn_url"].split("=")[-1], h["title"],
+                     h["points"], h["comments"], h["hn_url"]))
+            con.commit()
             lines.append("\u2014 \u2014 \u2014\n\U0001F4F0 <b>Hacker News</b> — что обсуждают:")
             for h in hn_items[:8]:
                 title = tg_html(h["title"][:90])

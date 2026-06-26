@@ -34,8 +34,14 @@ def load_data():
         advices = con.execute("SELECT seen_at, advice FROM advices ORDER BY seen_at DESC").fetchall()
     except Exception:
         advices = []
+    try:
+        last_hn = con.execute("SELECT MAX(seen_at) FROM hn").fetchone()[0]
+        hn = con.execute("SELECT title, points, comments, url FROM hn "
+            "WHERE seen_at=? ORDER BY points DESC", (last_hn,)).fetchall() if last_hn else []
+    except Exception:
+        hn = []
     con.close()
-    return {"dates": dates, "series": series, "meta": meta, "top_repos": top_repos, "growth": growth, "obs": obs, "advices": advices}
+    return {"dates": dates, "series": series, "meta": meta, "top_repos": top_repos, "growth": growth, "obs": obs, "advices": advices, "hn": hn}
 
 
 def build_html(data):
@@ -68,6 +74,14 @@ def build_html(data):
         adv_html += f"<div class='adv-date'>{d}</div><div class='adv-text'>{safe}</div>"
     if not adv_html:
         adv_html = "<p style='color:#888'>Отчёты появятся после запусков радара.</p>"
+    hn_html = ""
+    for title, points, comments, url in data.get("hn", []):
+        safe = (title or "").replace("<", "&lt;").replace(">", "&gt;")
+        hn_html += (f"<div class='hn-item'><span class='hn-pts'>{points}▲</span> "
+                    f"<a href='{url}' target='_blank'>{safe}</a> "
+                    f"<span class='hn-c'>{comments} комм.</span></div>")
+    if not hn_html:
+        hn_html = "<p style='color:#888'>HN появится после запусков.</p>"
     generated = datetime.now(TZ).strftime("%d.%m.%Y %H:%M") + " (Астана)"
     return f"""<!DOCTYPE html>
 <html lang="ru"><head><meta charset="UTF-8">
@@ -87,12 +101,16 @@ a{{color:#58a6ff;text-decoration:none}} a:hover{{text-decoration:underline}}
 .obs-repo{{color:#58a6ff;font-weight:600}} .obs-note{{color:#c9d1d9}}
 .adv-date{{color:#8b949e;font-size:12px;margin:16px 0 6px;font-weight:600}}
 .adv-text{{color:#c9d1d9;font-size:14px;line-height:1.6;background:#0d1117;padding:12px;border-radius:8px;border:1px solid #21262d}}
+.hn-item{{padding:7px 0;border-bottom:1px solid #21262d;font-size:13px}}
+.hn-pts{{color:#ff7b72;font-weight:600;margin-right:6px}}
+.hn-c{{color:#8b949e;font-size:12px;margin-left:6px}}
 canvas{{max-height:380px}}
 </style></head><body>
 <h1>📡 GitHub Radar</h1>
 <div class="sub">Обновлено: {generated} · дней истории: {len(dates)}</div>
 <div class="card"><h2>📈 Рост звёзд (топ по приросту)</h2><canvas id="growthChart"></canvas></div>
 <div class="card"><h2>📋 Отчёты Claude по дням</h2>{adv_html}</div>
+<div class="card"><h2>📰 Hacker News — что обсуждают</h2>{hn_html}</div>
 <div class="card"><h2>🎯 Наблюдения Claude по дням</h2>{obs_html}</div>
 <div class="card"><h2>🔥 Топ по приросту</h2><table>
 <tr><th>Проект</th><th>Язык</th><th style="text-align:right">Звёзд</th><th style="text-align:right">Прирост</th></tr>

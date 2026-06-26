@@ -1,0 +1,109 @@
+АВТОЗАПУСК РАДАРА УТРОМ И ВЕЧЕРОМ (Mac)
+========================================
+
+Цель: чтобы github_radar.py сам запускался в 9:00 и 21:00 и слал тебе
+в Telegram, без твоего участия. Терминал больше не нужен.
+
+На Mac для этого служит launchd (встроенный планировщик). Делается один раз.
+
+--------------------------------------------------------------------
+ШАГ 0. Подготовка
+--------------------------------------------------------------------
+1. Положи github_radar.py в постоянную папку, например:
+       /Users/ТВОЁ_ИМЯ/github_radar/github_radar.py
+   (замени ТВОЁ_ИМЯ на своё имя пользователя Mac; узнать: команда  whoami )
+
+2. Открой github_radar.py и впиши свой токен бота в строку:
+       TG_TOKEN = "сюда_актуальный_токен_из_BotFather"
+   chat_id уже вписан (543789742).
+
+3. Проверь, что работает вручную:
+       cd /Users/ТВОЁ_ИМЯ/github_radar
+       python3 github_radar.py
+   В Telegram должно прийти сообщение от бота. Если пришло — идём дальше.
+
+--------------------------------------------------------------------
+ШАГ 1. Узнай путь к python3
+--------------------------------------------------------------------
+Выполни в терминале:
+       which python3
+Скопируй путь, который он покажет (например /usr/bin/python3
+или /opt/homebrew/bin/python3). Он понадобится ниже как PYTHON_PATH.
+
+--------------------------------------------------------------------
+ШАГ 2. Создай файл расписания
+--------------------------------------------------------------------
+Создай файл по пути:
+   ~/Library/LaunchAgents/com.github.radar.plist
+
+с таким содержимым (подставь СВОЙ путь к python3 и СВОЙ путь к скрипту):
+
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+ "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.github.radar</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>PYTHON_PATH</string>
+        <string>/Users/ТВОЁ_ИМЯ/github_radar/github_radar.py</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict>
+            <key>Hour</key><integer>9</integer>
+            <key>Minute</key><integer>0</integer>
+        </dict>
+        <dict>
+            <key>Hour</key><integer>21</integer>
+            <key>Minute</key><integer>0</integer>
+        </dict>
+    </array>
+
+    <key>StandardOutPath</key>
+    <string>/Users/ТВОЁ_ИМЯ/github_radar/radar.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/ТВОЁ_ИМЯ/github_radar/radar_error.log</string>
+</dict>
+</plist>
+
+Замени в этом файле:
+  - PYTHON_PATH      → путь из шага 1
+  - /Users/ТВОЁ_ИМЯ/ → свой реальный путь (везде, 3 места)
+
+--------------------------------------------------------------------
+ШАГ 3. Включи расписание
+--------------------------------------------------------------------
+Выполни в терминале:
+   launchctl load ~/Library/LaunchAgents/com.github.radar.plist
+
+Готово. Теперь Mac сам будет запускать радар в 9:00 и 21:00.
+(Mac должен быть включён и не спать в эти моменты. Если спит — запустится,
+когда проснётся, либо настрой в Настройках → Аккумулятор пробуждение.)
+
+--------------------------------------------------------------------
+ПОЛЕЗНЫЕ КОМАНДЫ
+--------------------------------------------------------------------
+Проверить, что задача загружена:
+   launchctl list | grep radar
+
+Запустить прямо сейчас для теста (не дожидаясь времени):
+   launchctl start com.github.radar
+
+Выключить расписание:
+   launchctl unload ~/Library/LaunchAgents/com.github.radar.plist
+
+Посмотреть лог последнего запуска:
+   cat /Users/ТВОЁ_ИМЯ/github_radar/radar.log
+
+--------------------------------------------------------------------
+ЕСЛИ ХОЧЕШЬ ДРУГОЕ ВРЕМЯ
+--------------------------------------------------------------------
+В файле .plist меняй <integer>9</integer> и <integer>21</integer>
+на нужные часы. После любого изменения .plist:
+   launchctl unload ~/Library/LaunchAgents/com.github.radar.plist
+   launchctl load   ~/Library/LaunchAgents/com.github.radar.plist

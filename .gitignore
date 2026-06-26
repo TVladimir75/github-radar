@@ -1,0 +1,6 @@
+radar.log
+radar_error.log
+history.db
+__pycache__/
+.DS_Store
+*.pyc

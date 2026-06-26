@@ -252,83 +252,85 @@ def fmt(r, prefix, analysis):
 def main():
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     con = init_db()
+    repos = []
+    try:
+        repos = collect()
+        if not repos:
+            print("Ничего не собрано.")
+            return
 
-    repos = collect()
-    if not repos:
-        print("Ничего не собрано.")
-        return
+        movers = []
+        for r in repos:
+            prev = previous_stars(con, r["full_name"], today)
+            if prev is not None:
+                delta = r["stargazers_count"] - prev
+                if delta > 0:
+                    movers.append((delta, r))
 
-    movers = []
-    for r in repos:
-        prev = previous_stars(con, r["full_name"], today)
-        if prev is not None:
-            delta = r["stargazers_count"] - prev
-            if delta > 0:
-                movers.append((delta, r))
+        save_snapshot(con, repos, today)
+        movers.sort(key=lambda x: x[0], reverse=True)
+        spikes = [(d, r) for d, r in movers if d >= SPIKE_THRESHOLD]
 
-    save_snapshot(con, repos, today)
-    movers.sort(key=lambda x: x[0], reverse=True)
-    spikes = [(d, r) for d, r in movers if d >= SPIKE_THRESHOLD]
+        client = _client()
 
-    client = _client()
-
-    # разбор топ-проектов
-    if movers:
-        top_for_analysis = movers[:ANALYZE_TOP]
-    else:
-        top_for_analysis = [(r["stargazers_count"], r) for r in
-            sorted(repos, key=lambda x: x["stargazers_count"], reverse=True)[:ANALYZE_TOP]]
-    to_analyze = {id(r): (d, r) for d, r in spikes}
-    for d, r in top_for_analysis:
-        to_analyze[id(r)] = (d, r)
-    analyzed = analyze_with_claude(client, list(to_analyze.values()))
-
-    # НАДЗОР: ведём тренды во времени
-    past_obs = past_observations(con)
-    advice, new_obs = supervise_with_claude(client, repos, movers, past_obs)
-    if new_obs:
-        save_observations(con, today, new_obs)
-
-    now_str = datetime.now(TZ).strftime("%d.%m %H:%M")
-    lines = []
-
-    if spikes:
-        lines.append(f"\U0001F680 <b>ВСПЛЕСК на GitHub</b> ({now_str})")
-        for delta, r in spikes[:10]:
-            lines.append(fmt(r, f"+{delta}\u2B50", analyzed.get(r["full_name"])))
-
-    if SEND_DIGEST:
-        lines.append(f"\U0001F4E1 <b>Радар GitHub</b> ({now_str}) — топ растущих:"
-                     if not spikes else "\u2014 \u2014 \u2014\n\U0001F4E1 Остальной топ:")
+        # разбор топ-проектов
         if movers:
-            top = movers; star = True
+            top_for_analysis = movers[:ANALYZE_TOP]
         else:
-            top = [(r["stargazers_count"], r) for r in
-                   sorted(repos, key=lambda x: x["stargazers_count"], reverse=True)]
-            star = False
-        for val, r in top[:10]:
-            prefix = f"+{val}\u2B50" if star else f"{val}\u2B50"
-            lines.append(fmt(r, prefix, analyzed.get(r["full_name"])))
+            top_for_analysis = [(r["stargazers_count"], r) for r in
+                sorted(repos, key=lambda x: x["stargazers_count"], reverse=True)[:ANALYZE_TOP]]
+        to_analyze = {id(r): (d, r) for d, r in spikes}
+        for d, r in top_for_analysis:
+            to_analyze[id(r)] = (d, r)
+        analyzed = analyze_with_claude(client, list(to_analyze.values()))
 
-    # блок надзора — главное
-    if advice:
-        lines.append(f"\U0001F3AF <b>Сегодня обрати внимание:</b>\n{advice}")
+        # НАДЗОР: ведём тренды во времени
+        past_obs = past_observations(con)
+        advice, new_obs = supervise_with_claude(client, repos, movers, past_obs)
+        if new_obs:
+            save_observations(con, today, new_obs)
 
-    if not lines:
-        print("Нечего отправлять.")
-        return
+        now_str = datetime.now(TZ).strftime("%d.%m %H:%M")
+        lines = []
 
-    message = "\n\n".join(lines)
-    if len(message) > 4000:
-        message = message[:3950] + "\n\n\u2026(обрезано)"
-    send_telegram(message)
+        if spikes:
+            lines.append(f"\U0001F680 <b>ВСПЛЕСК на GitHub</b> ({now_str})")
+            for delta, r in spikes[:10]:
+                lines.append(fmt(r, f"+{delta}\u2B50", analyzed.get(r["full_name"])))
 
-    total = con.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0]
-    days_tracked = con.execute("SELECT COUNT(DISTINCT seen_at) FROM snapshots").fetchone()[0]
-    obs_count = con.execute("SELECT COUNT(*) FROM observations").fetchone()[0]
-    print(f"[база] записей: {total} | дней истории: {days_tracked} | наблюдений: {obs_count}")
+        if SEND_DIGEST:
+            lines.append(f"\U0001F4E1 <b>Радар GitHub</b> ({now_str}) — топ растущих:"
+                         if not spikes else "\u2014 \u2014 \u2014\n\U0001F4E1 Остальной топ:")
+            if movers:
+                top = movers; star = True
+            else:
+                top = [(r["stargazers_count"], r) for r in
+                       sorted(repos, key=lambda x: x["stargazers_count"], reverse=True)]
+                star = False
+            for val, r in top[:10]:
+                prefix = f"+{val}\u2B50" if star else f"{val}\u2B50"
+                lines.append(fmt(r, prefix, analyzed.get(r["full_name"])))
 
-    if PUBLISH_DASHBOARD:
+        # блок надзора — главное
+        if advice:
+            lines.append(f"\U0001F3AF <b>Сегодня обрати внимание:</b>\n{advice}")
+
+        if not lines:
+            print("Нечего отправлять.")
+        else:
+            message = "\n\n".join(lines)
+            if len(message) > 4000:
+                message = message[:3950] + "\n\n\u2026(обрезано)"
+            send_telegram(message)
+
+        total = con.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0]
+        days_tracked = con.execute("SELECT COUNT(DISTINCT seen_at) FROM snapshots").fetchone()[0]
+        obs_count = con.execute("SELECT COUNT(*) FROM observations").fetchone()[0]
+        print(f"[база] записей: {total} | дней истории: {days_tracked} | наблюдений: {obs_count}")
+    finally:
+        con.close()
+
+    if PUBLISH_DASHBOARD and repos:
         from dashboard import publish_to_github
         publish_to_github()
 

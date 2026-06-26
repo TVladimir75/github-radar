@@ -105,7 +105,7 @@ def publish_to_github():
         unchanged = subprocess.run(
             ["git", "-C", ROOT_DIR, "diff", "--staged", "--quiet"]).returncode == 0
         if unchanged:
-            print("[git] index.html без изменений")
+            print("[git] history.db и index.html без изменений")
             return
         msg = f"Update dashboard {datetime.now(TZ).strftime('%Y-%m-%d %H:%M')} Astana"
         subprocess.run(

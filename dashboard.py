@@ -98,7 +98,8 @@ def publish_to_github():
     """Regenerate index.html and push to GitHub if content changed."""
     main()
     try:
-        subprocess.run(["git", "-C", ROOT_DIR, "add", "index.html"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", ROOT_DIR, "add", "index.html", "history.db"],
+                         check=True, capture_output=True)
         unchanged = subprocess.run(
             ["git", "-C", ROOT_DIR, "diff", "--staged", "--quiet"]).returncode == 0
         if unchanged:

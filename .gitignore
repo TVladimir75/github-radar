@@ -1,6 +1,5 @@
 radar.log
 radar_error.log
-history.db
 .env
 __pycache__/
 .DS_Store

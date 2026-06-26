@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import os, sqlite3, json
+import os, sqlite3, json, subprocess
 from datetime import datetime
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "history.db")
 OUT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "index.html")
+ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 TOP_N = 12
 
 
@@ -91,6 +92,29 @@ backgroundColor:palette[i%palette.length],tension:0.3,spanGaps:true,pointRadius:
 options:{{responsive:true,plugins:{{legend:{{labels:{{color:'#8b949e',boxWidth:12,font:{{size:11}}}}}}}},
 scales:{{x:{{ticks:{{color:'#8b949e'}},grid:{{color:'#21262d'}}}},y:{{ticks:{{color:'#8b949e'}},grid:{{color:'#21262d'}}}}}}}}}});
 </script></body></html>"""
+
+
+def publish_to_github():
+    """Regenerate index.html and push to GitHub if content changed."""
+    main()
+    try:
+        subprocess.run(["git", "-C", ROOT_DIR, "add", "index.html"], check=True, capture_output=True)
+        unchanged = subprocess.run(
+            ["git", "-C", ROOT_DIR, "diff", "--staged", "--quiet"]).returncode == 0
+        if unchanged:
+            print("[git] index.html без изменений")
+            return
+        msg = f"Update dashboard {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        subprocess.run(
+            ["git", "-C", ROOT_DIR, "commit", "-m", msg], check=True, capture_output=True, text=True)
+        push = subprocess.run(
+            ["git", "-C", ROOT_DIR, "push"], check=True, capture_output=True, text=True)
+        print("[git] Дашборд опубликован: https://tvladimir75.github.io/github-radar/")
+        if push.stderr:
+            print(push.stderr.strip())
+    except subprocess.CalledProcessError as e:
+        err = (e.stderr or e.stdout or str(e)).strip()
+        print(f"[!] Git publish: {err}")
 
 
 def main():

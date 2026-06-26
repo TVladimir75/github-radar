@@ -10,12 +10,27 @@ import urllib.parse
 from datetime import datetime, timedelta, timezone
 
 # ============== НАСТРОЙКИ ==============
-TG_TOKEN   = "REDACTED_TELEGRAM_TOKEN"
-TG_CHAT_ID = "543789742"
+# Секреты — в .env (файл в .gitignore). См. .env.example
+def _load_local_env():
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if not os.path.exists(path):
+        return
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
+
+_load_local_env()
+TG_TOKEN = os.environ.get("TG_TOKEN", "")
+TG_CHAT_ID = os.environ.get("TG_CHAT_ID", "")
 TOPICS = ["ai-agents", "llm", "rag", "mcp", "saas", "automation"]
 DAYS = 7
 MIN_STARS = 30
 SEND_DIGEST = True
+PUBLISH_DASHBOARD = True       # авто-публикация index.html на GitHub Pages
 SPIKE_THRESHOLD = 20
 ANALYZE_TOP = 5
 MEMORY_DAYS = 7              # сколько дней Claude помнит свои наблюдения
@@ -209,8 +224,8 @@ def supervise_with_claude(client, repos, movers, past_obs):
 
 
 def send_telegram(text):
-    if TG_TOKEN == "ВСТАВЬ_ТОКЕН_БОТА":
-        print("[!] Не вписан токен бота. Вот что было бы отправлено:\n")
+    if not TG_TOKEN or TG_TOKEN == "ВСТАВЬ_ТОКЕН_БОТА":
+        print("[!] Не задан TG_TOKEN (.env или переменная окружения). Вот что было бы отправлено:\n")
         print(text)
         return
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
@@ -310,6 +325,10 @@ def main():
     days_tracked = con.execute("SELECT COUNT(DISTINCT seen_at) FROM snapshots").fetchone()[0]
     obs_count = con.execute("SELECT COUNT(*) FROM observations").fetchone()[0]
     print(f"[база] записей: {total} | дней истории: {days_tracked} | наблюдений: {obs_count}")
+
+    if PUBLISH_DASHBOARD:
+        from dashboard import publish_to_github
+        publish_to_github()
 
 
 if __name__ == "__main__":

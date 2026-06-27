@@ -2,8 +2,8 @@ name: GitHub Radar
 
 on:
   schedule:
-    # 9:00 и 21:00 по Астане (UTC+5)
-    - cron: "0 4,16 * * *"
+    # 9:07 и 21:07 по Астане (UTC+5) — смещение от :00 снижает пропуски cron
+    - cron: "7 4,16 * * *"
   workflow_dispatch:
 
 permissions:

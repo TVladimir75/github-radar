@@ -40,8 +40,17 @@ def load_data():
             "WHERE seen_at=? ORDER BY points DESC", (last_hn,)).fetchall() if last_hn else []
     except Exception:
         hn = []
+    try:
+        last_tm = con.execute("SELECT MAX(seen_at) FROM trustmrr").fetchone()[0]
+        trustmrr = con.execute(
+            "SELECT name, mrr, growth, category, url, for_sale FROM trustmrr "
+            "WHERE seen_at=? ORDER BY growth DESC, mrr DESC",
+            (last_tm,)).fetchall() if last_tm else []
+    except Exception:
+        trustmrr = []
     con.close()
-    return {"dates": dates, "series": series, "meta": meta, "top_repos": top_repos, "growth": growth, "obs": obs, "advices": advices, "hn": hn}
+    return {"dates": dates, "series": series, "meta": meta, "top_repos": top_repos,
+            "growth": growth, "obs": obs, "advices": advices, "hn": hn, "trustmrr": trustmrr}
 
 
 def build_html(data):
@@ -82,6 +91,15 @@ def build_html(data):
                     f"<span class='hn-c'>{comments} комм.</span></div>")
     if not hn_html:
         hn_html = "<p style='color:#888'>HN появится после запусков.</p>"
+    tm_html = ""
+    for name, mrr, growth, category, url, for_sale in data.get("trustmrr", []):
+        safe = (name or "").replace("<", "&lt;").replace(">", "&gt;")
+        sale = " 🏷️" if for_sale else ""
+        tm_html += (f"<div class='tm-item'><span class='tm-growth'>{growth:+.1f}%</span> "
+                    f"<a href='{url}' target='_blank'>{safe}</a> "
+                    f"<span class='tm-meta'>${mrr:,.0f} MRR · {category}{sale}</span></div>")
+    if not tm_html:
+        tm_html = "<p style='color:#888'>TrustMRR появится после запусков.</p>"
     generated = datetime.now(TZ).strftime("%d.%m.%Y %H:%M") + " (Астана)"
     return f"""<!DOCTYPE html>
 <html lang="ru"><head><meta charset="UTF-8">
@@ -104,6 +122,9 @@ a{{color:#58a6ff;text-decoration:none}} a:hover{{text-decoration:underline}}
 .hn-item{{padding:7px 0;border-bottom:1px solid #21262d;font-size:13px}}
 .hn-pts{{color:#ff7b72;font-weight:600;margin-right:6px}}
 .hn-c{{color:#8b949e;font-size:12px;margin-left:6px}}
+.tm-item{{padding:7px 0;border-bottom:1px solid #21262d;font-size:13px}}
+.tm-growth{{color:#2da44e;font-weight:600;margin-right:6px}}
+.tm-meta{{color:#8b949e;font-size:12px;margin-left:6px}}
 canvas{{max-height:380px}}
 </style></head><body>
 <h1>📡 GitHub Radar</h1>
@@ -111,6 +132,7 @@ canvas{{max-height:380px}}
 <div class="card"><h2>📈 Рост звёзд (топ по приросту)</h2><canvas id="growthChart"></canvas></div>
 <div class="card"><h2>📋 Отчёты Claude по дням</h2>{adv_html}</div>
 <div class="card"><h2>📰 Hacker News — что обсуждают</h2>{hn_html}</div>
+<div class="card"><h2>💰 TrustMRR — что зарабатывает</h2>{tm_html}</div>
 <div class="card"><h2>🎯 Наблюдения Claude по дням</h2>{obs_html}</div>
 <div class="card"><h2>🔥 Топ по приросту</h2><table>
 <tr><th>Проект</th><th>Язык</th><th style="text-align:right">Звёзд</th><th style="text-align:right">Прирост</th></tr>

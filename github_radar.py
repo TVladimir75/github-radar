@@ -3,6 +3,7 @@
 # github_radar.py — радар трендов GitHub с памятью наблюдений и надзором Claude.
 
 import os
+import re
 import json
 import sqlite3
 import urllib.request
@@ -39,7 +40,15 @@ CLAUDE_MODEL = "claude-sonnet-4-5-20250929"
 TZ = ZoneInfo("Asia/Almaty")
 # ======================================
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "history.db")
+TRUSTMRR_URL = "https://trustmrr.com/"
+TRUSTMRR_CATEGORIES = {
+    "AI": ["ai", "ml", "gpt", "llm", "bot", "automation", "learning", "neural",
+           "artificial intelligence", "machine learning"],
+    "SaaS": ["saas", "software", "cloud", "subscription", "b2b", "b2c", "platform"],
+    "Developer Tools": ["developer", "devops", "api", "sdk", "ide", "git", "engineering",
+                        "code", "programming", "terminal"],
+}
+TRUSTMRR_TARGET_CATEGORIES = ["AI", "SaaS", "Developer Tools"]
 API = "https://api.github.com/search/repositories"
 
 
@@ -57,6 +66,9 @@ def init_db():
     con.execute("""CREATE TABLE IF NOT EXISTS hn (
         seen_at TEXT, hn_id TEXT, title TEXT, points INTEGER,
         comments INTEGER, url TEXT, PRIMARY KEY (seen_at, hn_id))""")
+    con.execute("""CREATE TABLE IF NOT EXISTS trustmrr (
+        seen_at TEXT, name TEXT, mrr REAL, growth REAL, category TEXT,
+        url TEXT, for_sale INTEGER, PRIMARY KEY (seen_at, name))""")
     con.commit()
     return con
 
@@ -154,6 +166,96 @@ def collect_hn():
     return items[:10]
 
 
+def _trustmrr_field(chunk, key):
+    m = re.search(
+        rf'"{re.escape(key)}":(null|true|false|[-\d.eE+]+|"((?:\\.|[^"\\])*)")', chunk)
+    if not m:
+        return None
+    if m.group(1) == "null":
+        return None
+    if m.group(1) in ("true", "false"):
+        return m.group(1) == "true"
+    if m.group(2) is not None:
+        try:
+            return json.loads(f'"{m.group(2)}"')
+        except json.JSONDecodeError:
+            return m.group(2).replace("\\n", " ").replace('\\"', '"')
+    return float(m.group(1))
+
+
+def _trustmrr_category(name, description):
+    text = f"{name} {description or ''}".lower()
+    for category in TRUSTMRR_TARGET_CATEGORIES:
+        if any(kw in text for kw in TRUSTMRR_CATEGORIES[category]):
+            return category
+    return None
+
+
+def _trustmrr_parse_rsc(html):
+    startups = {}
+    chunks = re.findall(r'self\.__next_f\.push\(\[1,"(.*?)"\]\)', html, re.S)
+    for raw in chunks:
+        dec = bytes(raw, "utf-8").decode("unicode_escape", errors="replace")
+        pos = 0
+        while True:
+            idx = dec.find('"_id":"', pos)
+            if idx < 0:
+                break
+            chunk = dec[idx:idx + 3500]
+            if '"slug":"' not in chunk or '"currentMrr"' not in chunk:
+                pos = idx + 6
+                continue
+            slug = _trustmrr_field(chunk, "slug")
+            name = _trustmrr_field(chunk, "name")
+            if not slug or not name:
+                pos = idx + 6
+                continue
+            growth = _trustmrr_field(chunk, "cachedGrowthMRR30d")
+            if growth is None:
+                growth = _trustmrr_field(chunk, "growthMRR30d")
+            startups[slug] = {
+                "name": name,
+                "slug": slug,
+                "mrr": float(_trustmrr_field(chunk, "currentMrr") or 0),
+                "growth": float(growth or 0),
+                "description": _trustmrr_field(chunk, "description") or "",
+                "on_sale": bool(_trustmrr_field(chunk, "onSale")),
+            }
+            pos = idx + 6
+    return list(startups.values())
+
+
+def collect_trustmrr():
+    """Top TrustMRR startups by MoM MRR growth from homepage RSC payload."""
+    req = urllib.request.Request(
+        TRUSTMRR_URL,
+        headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                           "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"})
+    try:
+        with urllib.request.urlopen(req, timeout=45) as resp:
+            html = resp.read().decode("utf-8", errors="replace")
+    except Exception as e:
+        print(f"[!] TrustMRR: {e}")
+        return []
+
+    items = []
+    for s in _trustmrr_parse_rsc(html):
+        category = _trustmrr_category(s["name"], s["description"])
+        if category not in TRUSTMRR_TARGET_CATEGORIES:
+            continue
+        items.append({
+            "name": s["name"],
+            "mrr": round(s["mrr"], 2),
+            "growth": round(s["growth"], 2),
+            "category": category,
+            "url": f"https://trustmrr.com/startup/{s['slug']}",
+            "for_sale": s["on_sale"],
+        })
+
+    items.sort(key=lambda x: (x["growth"], x["mrr"]), reverse=True)
+    return items[:10]
+
+
 def _client():
     key = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
     if not key:
@@ -202,7 +304,7 @@ def analyze_with_claude(client, items):
     return result
 
 
-def supervise_with_claude(client, repos, movers, past_obs, hn_items=None):
+def supervise_with_claude(client, repos, movers, past_obs, hn_items=None, trustmrr_items=None):
     """Надзор: Claude ведёт тренды во времени, помнит прошлые наблюдения,
     выдаёт ежедневный совет + новые наблюдения для записи в память.
     Возвращает (текст_совета, список_новых_наблюдений)."""
@@ -225,6 +327,17 @@ def supervise_with_claude(client, repos, movers, past_obs, hn_items=None):
     else:
         hn_block = "(нет данных HN)"
 
+    if trustmrr_items:
+        tm_lines = []
+        for t in trustmrr_items[:8]:
+            sale = ", продаётся" if t.get("for_sale") else ""
+            tm_lines.append(
+                f"- {t['name']} ({t['category']}): MRR ${t['mrr']:,.0f}, "
+                f"рост MoM {t['growth']:+.1f}%{sale}")
+        tm_block = "\n".join(tm_lines)
+    else:
+        tm_block = "(нет данных TrustMRR)"
+
     # память прошлых наблюдений
     if past_obs:
         mem = "\n".join(f"- [{d}] {repo}: {note}" for d, repo, note in past_obs)
@@ -245,9 +358,10 @@ def supervise_with_claude(client, repos, movers, past_obs, hn_items=None):
         "ТВОИ ПРОШЛЫЕ НАБЛЮДЕНИЯ (за неделю):\n" + mem + "\n\n"
         "СЕГОДНЯШНЯЯ КАРТИНА GITHUB (что строят):\n" + current + "\n\n"
         "ЧТО ОБСУЖДАЮТ НА HACKER NEWS (настроения, тревоги, запуски):\n" + hn_block + "\n\n"
-        "ВАЖНО: свяжи два источника. GitHub показывает что СТРОЯТ, HN — что "
-        "ОБСУЖДАЮТ и чего боятся. Самые сильные ниши там, где одно совпадает с другим "
-        "(строят инструмент И активно обсуждают проблему, которую он решает).\n\n"
+        "ЧТО УЖЕ ЗАРАБАТЫВАЕТ НА TRUSTMRR (проверенная выручка, MRR, рост MoM):\n" + tm_block + "\n\n"
+        "ВАЖНО: свяжи три источника. GitHub — что СТРОЯТ, HN — что ОБСУЖДАЮТ и чего боятся, "
+        "TrustMRR — что УЖЕ МОНЕТИЗИРОВАНО. Самые сильные ниши там, где все три совпадают "
+        "(строят инструмент, активно обсуждают проблему, и похожие продукты уже зарабатывают).\n\n"
         "Сделай две вещи:\n\n"
         "1) НАПИШИ СОВЕТ на русском (4-6 предложений, без списков), заголовок не нужен:\n"
         "   - что из прошлых наблюдений ПОДТВЕРДИЛОСЬ или усилилось (растёт несколько дней);\n"
@@ -373,8 +487,10 @@ def main():
 
         # НАДЗОР: ведём тренды во времени
         hn_items = collect_hn()
+        trustmrr_items = collect_trustmrr()
         past_obs = past_observations(con)
-        advice, new_obs = supervise_with_claude(client, repos, movers, past_obs, hn_items)
+        advice, new_obs = supervise_with_claude(
+            client, repos, movers, past_obs, hn_items, trustmrr_items)
         if new_obs:
             save_observations(con, today, new_obs)
         if advice:
@@ -414,6 +530,22 @@ def main():
                 title = tg_html(h["title"][:90])
                 lines.append(f"<b>{h['points']}\u25B2</b> <a href=\"{h['hn_url']}\">{title}</a> "
                              f"({h['comments']} коммент.)")
+
+        # TrustMRR — отдельный блок
+        if trustmrr_items:
+            for t in trustmrr_items:
+                con.execute("INSERT OR REPLACE INTO trustmrr VALUES (?,?,?,?,?,?,?)",
+                    (today, t["name"], t["mrr"], t["growth"], t["category"],
+                     t["url"], 1 if t["for_sale"] else 0))
+            con.commit()
+            lines.append("\u2014 \u2014 \u2014\n\U0001F4B0 <b>TrustMRR</b> \u2014 что зарабатывает:")
+            for t in trustmrr_items[:8]:
+                sale = " \U0001F3F7\uFE0F" if t["for_sale"] else ""
+                name = tg_html(t["name"][:50])
+                growth_sign = f"{t['growth']:+.1f}%"
+                lines.append(
+                    f"<b>{growth_sign}</b> <a href=\"{t['url']}\">{name}</a> "
+                    f"${t['mrr']:,.0f} MRR \u00b7 {tg_html(t['category'])}{sale}")
 
         # блок надзора — главное
         if advice:

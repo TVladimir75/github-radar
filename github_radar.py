@@ -49,6 +49,7 @@ TRUSTMRR_CATEGORIES = {
                         "code", "programming", "terminal"],
 }
 TRUSTMRR_TARGET_CATEGORIES = ["AI", "SaaS", "Developer Tools"]
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "history.db")
 API = "https://api.github.com/search/repositories"
 
 
